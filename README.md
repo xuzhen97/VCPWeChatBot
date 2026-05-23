@@ -75,6 +75,7 @@ interface ChatResponse {
     url: string;                  // 本地路径或 HTTPS URL
     fileName?: string;
   };
+  followUp?: Promise<ChatResponse>; // 可选的延迟补发结果，同一会话内稍后继续发送
 }
 ```
 
@@ -211,6 +212,7 @@ OPENAI_API_KEY=sk-xxx pnpm run start -w packages/example-openai
 | 视频 | 返回 `{ media: { type: "video", url: "/path/to/video.mp4" } }` |
 | 文件 | 返回 `{ media: { type: "file", url: "/path/to/doc.pdf" } }` |
 | 文本 + 媒体 | `text` 和 `media` 同时返回，文本作为附带说明发送 |
+| 延迟补发 | `followUp: Promise<ChatResponse>`，先回首包，结果准备好后在同一会话继续发送 |
 | 远程图片 | `url` 填 HTTPS 链接，SDK 自动下载后上传到微信 CDN |
 | 主动发送 | 通过 `const bot = start(agent)` 后调用 `bot.sendMessage(...)` |
 

@@ -24,6 +24,22 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
+  packages/example-vcp:
+    dependencies:
+      weixin-agent-sdk:
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.15
+      tsx:
+        specifier: ^4.0.0
+        version: 4.21.0
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
   packages/sdk:
     dependencies:
       qrcode-terminal:

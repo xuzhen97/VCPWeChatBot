@@ -6,6 +6,8 @@ import type { MessageItem, SendMessageReq } from "../api/types.js";
 import { MessageItemType, MessageState, MessageType } from "../api/types.js";
 import type { UploadedFileInfo } from "../cdn/upload.js";
 
+const WEIXIN_TEXT_CHUNK_LIMIT = 1800;
+
 export function generateClientId(): string {
   return generateId("openclaw-weixin");
 }
@@ -36,6 +38,101 @@ export function markdownToPlainText(text: string): string {
     .replace(/~~(.+?)~~/g, "$1")
     .replace(/`(.+?)`/g, "$1");
   return result;
+}
+
+function sliceTextChunk(text: string, start: number, maxLength: number): string {
+  const remaining = text.slice(start);
+  if (remaining.length <= maxLength) {
+    return remaining;
+  }
+
+  const candidate = remaining.slice(0, maxLength);
+  const newlineIndex = candidate.lastIndexOf("\n");
+  if (newlineIndex >= Math.floor(maxLength * 0.4)) {
+    return candidate.slice(0, newlineIndex).trimEnd();
+  }
+
+  const spaceIndex = candidate.lastIndexOf(" ");
+  if (spaceIndex >= Math.floor(maxLength * 0.6)) {
+    return candidate.slice(0, spaceIndex).trimEnd();
+  }
+
+  return candidate.trimEnd();
+}
+
+function splitTextForWeixin(text: string, maxLength = WEIXIN_TEXT_CHUNK_LIMIT): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const chunks: string[] = [];
+  let cursor = 0;
+
+  while (cursor < normalized.length) {
+    while (cursor < normalized.length && /\s/.test(normalized[cursor])) {
+      cursor += 1;
+    }
+    if (cursor >= normalized.length) {
+      break;
+    }
+
+    const chunk = sliceTextChunk(normalized, cursor, maxLength);
+    if (!chunk) {
+      const fallback = normalized.slice(cursor, cursor + maxLength).trim();
+      if (!fallback) {
+        break;
+      }
+      chunks.push(fallback);
+      cursor += fallback.length;
+      continue;
+    }
+
+    chunks.push(chunk);
+    cursor += chunk.length;
+  }
+
+  return chunks;
+}
+
+async function sendMessageRequest(params: {
+  req: SendMessageReq;
+  baseUrl: string;
+  token?: string;
+  timeoutMs?: number;
+  label: string;
+  to: string;
+  clientId: string;
+  itemType: MessageItem["type"];
+  chunkIndex?: number;
+  chunkCount?: number;
+  textLength?: number;
+}): Promise<void> {
+  const { req, baseUrl, token, timeoutMs, label, to, clientId, itemType, chunkIndex, chunkCount, textLength } = params;
+  const chunkSuffix =
+    chunkIndex && chunkCount ? ` chunk=${chunkIndex}/${chunkCount}` : "";
+  const textSuffix = typeof textLength === "number" ? ` textLength=${textLength}` : "";
+
+  logger.info(
+    `${label}: start to=${to} clientId=${clientId} itemType=${itemType}${chunkSuffix}${textSuffix}`,
+  );
+
+  try {
+    const resp = await sendMessageApi({
+      baseUrl,
+      token,
+      timeoutMs,
+      body: req,
+    });
+    logger.info(
+      `${label}: success to=${to} clientId=${clientId} itemType=${itemType}${chunkSuffix} ret=${resp.ret ?? 0} errmsg=${resp.errmsg ?? ""}`,
+    );
+  } catch (err) {
+    logger.error(
+      `${label}: failed to=${to} clientId=${clientId} itemType=${itemType}${chunkSuffix} err=${String(err)}`,
+    );
+    throw err;
+  }
 }
 
 
@@ -88,25 +185,43 @@ export async function sendMessageWeixin(params: {
     logger.error(`sendMessageWeixin: contextToken missing, refusing to send to=${to}`);
     throw new Error("sendMessageWeixin: contextToken is required");
   }
-  const clientId = generateClientId();
-  const req = buildSendMessageReq({
-    to,
-    contextToken: opts.contextToken,
-    text,
-    clientId,
-  });
-  try {
-    await sendMessageApi({
+
+  const chunks = splitTextForWeixin(text);
+  if (chunks.length === 0) {
+    logger.warn(`sendMessageWeixin: empty text after normalization, refusing to send to=${to}`);
+    throw new Error("sendMessageWeixin: text is empty after normalization");
+  }
+
+  logger.info(
+    `sendMessageWeixin: prepared to=${to} chunkCount=${chunks.length} originalTextLength=${text.length} maxChunkLength=${WEIXIN_TEXT_CHUNK_LIMIT} hasContextToken=${Boolean(opts.contextToken)}`,
+  );
+
+  let lastClientId = "";
+  for (const [index, chunk] of chunks.entries()) {
+    lastClientId = generateClientId();
+    const req = buildSendMessageReq({
+      to,
+      contextToken: opts.contextToken,
+      text: chunk,
+      clientId: lastClientId,
+    });
+
+    await sendMessageRequest({
+      req,
       baseUrl: opts.baseUrl,
       token: opts.token,
       timeoutMs: opts.timeoutMs,
-      body: req,
+      label: "sendMessageWeixin",
+      to,
+      clientId: lastClientId,
+      itemType: MessageItemType.TEXT,
+      chunkIndex: index + 1,
+      chunkCount: chunks.length,
+      textLength: chunk.length,
     });
-  } catch (err) {
-    logger.error(`sendMessageWeixin: failed to=${to} clientId=${clientId} err=${String(err)}`);
-    throw err;
   }
-  return { messageId: clientId };
+
+  return { messageId: lastClientId };
 }
 
 /**
@@ -122,40 +237,56 @@ async function sendMediaItems(params: {
 }): Promise<{ messageId: string }> {
   const { to, text, mediaItem, opts, label } = params;
 
-  const items: MessageItem[] = [];
-  if (text) {
-    items.push({ type: MessageItemType.TEXT, text_item: { text } });
-  }
-  items.push(mediaItem);
-
+  const textChunks = splitTextForWeixin(text);
   let lastClientId = "";
-  for (const item of items) {
+
+  for (const [index, chunk] of textChunks.entries()) {
     lastClientId = generateClientId();
-    const req: SendMessageReq = {
-      msg: {
-        from_user_id: "",
-        to_user_id: to,
-        client_id: lastClientId,
-        message_type: MessageType.BOT,
-        message_state: MessageState.FINISH,
-        item_list: [item],
-        context_token: opts.contextToken ?? undefined,
-      },
-    };
-    try {
-      await sendMessageApi({
-        baseUrl: opts.baseUrl,
-        token: opts.token,
-        timeoutMs: opts.timeoutMs,
-        body: req,
-      });
-    } catch (err) {
-      logger.error(
-        `${label}: failed to=${to} clientId=${lastClientId} err=${String(err)}`,
-      );
-      throw err;
-    }
+    const req = buildTextMessageReq({
+      to,
+      text: chunk,
+      contextToken: opts.contextToken,
+      clientId: lastClientId,
+    });
+
+    await sendMessageRequest({
+      req,
+      baseUrl: opts.baseUrl,
+      token: opts.token,
+      timeoutMs: opts.timeoutMs,
+      label,
+      to,
+      clientId: lastClientId,
+      itemType: MessageItemType.TEXT,
+      chunkIndex: index + 1,
+      chunkCount: textChunks.length,
+      textLength: chunk.length,
+    });
   }
+
+  lastClientId = generateClientId();
+  const req: SendMessageReq = {
+    msg: {
+      from_user_id: "",
+      to_user_id: to,
+      client_id: lastClientId,
+      message_type: MessageType.BOT,
+      message_state: MessageState.FINISH,
+      item_list: [mediaItem],
+      context_token: opts.contextToken ?? undefined,
+    },
+  };
+
+  await sendMessageRequest({
+    req,
+    baseUrl: opts.baseUrl,
+    token: opts.token,
+    timeoutMs: opts.timeoutMs,
+    label,
+    to,
+    clientId: lastClientId,
+    itemType: mediaItem.type,
+  });
 
   logger.debug(`${label}: success to=${to} clientId=${lastClientId}`);
   return { messageId: lastClientId };

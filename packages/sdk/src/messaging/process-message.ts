@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { Agent, ChatRequest } from "../agent/interface.js";
+import type { Agent, ChatRequest, ChatResponse } from "../agent/interface.js";
 import { sendTyping } from "../api/api.js";
 import type { WeixinMessage, MessageItem } from "../api/types.js";
 import { MessageItemType, TypingStatus } from "../api/types.js";
@@ -63,6 +63,105 @@ function extractTextBody(itemList?: MessageItem[]): string {
     }
   }
   return "";
+}
+
+async function sendAgentResponse(params: {
+  response: ChatResponse;
+  to: string;
+  contextToken?: string;
+  baseUrl: string;
+  token?: string;
+  cdnBaseUrl: string;
+  receivedAt: number;
+}): Promise<void> {
+  const { response, to, contextToken, baseUrl, token, cdnBaseUrl, receivedAt } = params;
+
+  if (response.media) {
+    let filePath: string;
+    const mediaUrl = response.media.url;
+    if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+      filePath = await downloadRemoteImageToTemp(
+        mediaUrl,
+        path.join(MEDIA_TEMP_DIR, "outbound"),
+      );
+    } else {
+      filePath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(mediaUrl);
+    }
+    logger.info(
+      `processOneMessage: sending media reply to=${to} elapsedMs=${Date.now() - receivedAt} mediaType=${response.media.type}`,
+    );
+    await sendWeixinMediaFile({
+      filePath,
+      to,
+      text: response.text ? markdownToPlainText(response.text) : "",
+      opts: { baseUrl, token, contextToken },
+      cdnBaseUrl,
+    });
+    logger.info(
+      `processOneMessage: media reply sent to=${to} totalElapsedMs=${Date.now() - receivedAt}`,
+    );
+    return;
+  }
+
+  if (response.text) {
+    const plainText = markdownToPlainText(response.text);
+    logger.info(
+      `processOneMessage: sending text reply to=${to} elapsedMs=${Date.now() - receivedAt} textLength=${plainText.length}`,
+    );
+    await sendMessageWeixin({
+      to,
+      text: plainText,
+      opts: { baseUrl, token, contextToken },
+    });
+    logger.info(
+      `processOneMessage: text reply sent to=${to} totalElapsedMs=${Date.now() - receivedAt}`,
+    );
+    return;
+  }
+
+  logger.warn(`processOneMessage: empty agent response to=${to} elapsedMs=${Date.now() - receivedAt}`);
+}
+
+async function deliverFollowUpChain(params: {
+  response: ChatResponse;
+  to: string;
+  contextToken?: string;
+  baseUrl: string;
+  token?: string;
+  cdnBaseUrl: string;
+  receivedAt: number;
+}): Promise<void> {
+  const { response, to, contextToken, baseUrl, token, cdnBaseUrl, receivedAt } = params;
+
+  if (!response.followUp) {
+    return;
+  }
+
+  logger.info(`processOneMessage: awaiting followUp to=${to} elapsedMs=${Date.now() - receivedAt}`);
+  const nextResponse = await response.followUp;
+  logger.info(
+    `processOneMessage: followUp resolved to=${to} elapsedMs=${Date.now() - receivedAt} hasText=${Boolean(nextResponse.text)} hasMedia=${Boolean(nextResponse.media)} hasNestedFollowUp=${Boolean(nextResponse.followUp)}`,
+  );
+
+  await sendAgentResponse({
+    response: nextResponse,
+    to,
+    contextToken,
+    baseUrl,
+    token,
+    cdnBaseUrl,
+    receivedAt,
+  });
+
+  await deliverFollowUpChain({
+    response: nextResponse,
+    to,
+    contextToken,
+    baseUrl,
+    token,
+    cdnBaseUrl,
+    receivedAt,
+  });
 }
 
 /** Find the first downloadable media item from a message. */
@@ -203,30 +302,43 @@ export async function processOneMessage(
   // --- Call agent & send reply ---
   try {
     const response = await deps.agent.chat(request);
+    const elapsedSinceInbound = Date.now() - receivedAt;
 
-    if (response.media) {
-      let filePath: string;
-      const mediaUrl = response.media.url;
-      if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
-        filePath = await downloadRemoteImageToTemp(
-          mediaUrl,
-          path.join(MEDIA_TEMP_DIR, "outbound"),
-        );
-      } else {
-        filePath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(mediaUrl);
-      }
-      await sendWeixinMediaFile({
-        filePath,
+    logger.info(
+      `processOneMessage: agent completed to=${to} elapsedMs=${elapsedSinceInbound} hasText=${Boolean(response.text)} hasMedia=${Boolean(response.media)} hasFollowUp=${Boolean(response.followUp)} contextToken=${contextToken ? "present" : "missing"}`,
+    );
+
+    await sendAgentResponse({
+      response,
+      to,
+      contextToken,
+      baseUrl: deps.baseUrl,
+      token: deps.token,
+      cdnBaseUrl: deps.cdnBaseUrl,
+      receivedAt,
+    });
+
+    if (response.followUp) {
+      void deliverFollowUpChain({
+        response,
         to,
-        text: response.text ? markdownToPlainText(response.text) : "",
-        opts: { baseUrl: deps.baseUrl, token: deps.token, contextToken },
+        contextToken,
+        baseUrl: deps.baseUrl,
+        token: deps.token,
         cdnBaseUrl: deps.cdnBaseUrl,
-      });
-    } else if (response.text) {
-      await sendMessageWeixin({
-        to,
-        text: markdownToPlainText(response.text),
-        opts: { baseUrl: deps.baseUrl, token: deps.token, contextToken },
+        receivedAt,
+      }).catch((followUpError) => {
+        logger.error(
+          `processOneMessage: followUp delivery failed: ${followUpError instanceof Error ? followUpError.stack ?? followUpError.message : JSON.stringify(followUpError)}`,
+        );
+        void sendWeixinErrorNotice({
+          to,
+          contextToken,
+          message: `⚠️ 后续补发失败：${followUpError instanceof Error ? followUpError.message : JSON.stringify(followUpError)}`,
+          baseUrl: deps.baseUrl,
+          token: deps.token,
+          errLog: deps.errLog,
+        });
       });
     }
   } catch (err) {

@@ -41,4 +41,6 @@ export interface ChatResponse {
     /** Filename hint (for file attachments). */
     fileName?: string;
   };
+  /** Optional deferred follow-up reply that should be delivered later in the same conversation. */
+  followUp?: Promise<ChatResponse>;
 }

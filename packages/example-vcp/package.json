@@ -1,0 +1,22 @@
+{
+  "name": "example-vcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeChat + VCPToolBox example using weixin-agent-sdk",
+  "type": "module",
+  "scripts": {
+    "prelogin": "pnpm --dir ../.. --filter weixin-agent-sdk build",
+    "login": "tsx main.ts login",
+    "prestart": "pnpm --dir ../.. --filter weixin-agent-sdk build",
+    "start": "tsx main.ts start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "weixin-agent-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.8.0"
+  }
+}

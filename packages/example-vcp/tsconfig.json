@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "weixin-agent-sdk": ["../sdk/index.ts"]
+    }
+  },
+  "include": ["main.ts", "src/**/*.ts", "../sdk/src/vendor.d.ts"],
+  "exclude": ["node_modules"]
+}
