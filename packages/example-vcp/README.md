@@ -111,3 +111,74 @@ pnpm --dir "d:/VCPHub/weixin-agent-sdk" --filter example-vcp run login
 ```bash
 pnpm --dir "d:/VCPHub/weixin-agent-sdk" --filter example-vcp run start
 ```
+
+## Linux 部署
+
+推荐始终从 workspace 根目录启动，这样 `example-vcp -> weixin-agent-sdk` 的构建链路和 workspace 依赖解析最稳定。
+
+目录示例：
+
+```bash
+/opt/VCPWeChatBot
+```
+
+首次部署建议顺序：
+
+```bash
+cd /opt/VCPWeChatBot
+pnpm approve-builds
+pnpm install
+pnpm --filter example-vcp run login
+pnpm --filter example-vcp run start
+```
+
+说明：
+
+- `login` 需要人工扫码，只需要先手动执行一次
+- `start` 才适合交给进程管理器常驻托管
+- 运行时会自动读取 `packages/example-vcp/.env`
+
+## PM2
+
+仓库根目录提供了 `ecosystem.config.cjs`，默认按 Linux 路径 `/opt/VCPWeChatBot` 配置 `example-vcp`。
+
+使用方式：
+
+1. 先手动登录微信
+
+```bash
+cd /opt/VCPWeChatBot
+pnpm --filter example-vcp run login
+```
+
+2. 启动 pm2 托管
+
+```bash
+cd /opt/VCPWeChatBot
+pm2 start ecosystem.config.cjs
+```
+
+3. 查看状态和日志
+
+```bash
+pm2 status
+pm2 logs example-vcp
+```
+
+4. 设置开机自启
+
+```bash
+pm2 save
+pm2 startup
+```
+
+`pm2 startup` 会输出一条需要再次执行的系统命令，按提示再执行一次即可。
+
+常用维护命令：
+
+```bash
+pm2 restart example-vcp
+pm2 stop example-vcp
+pm2 delete example-vcp
+pm2 logs example-vcp
+```
