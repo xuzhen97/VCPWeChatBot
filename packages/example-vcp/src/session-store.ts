@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import type { ChatRequest } from "weixin-agent-sdk";
 
@@ -33,6 +34,26 @@ function clipText(text: string, maxChars: number): string {
 
 function estimateMessagesChars(messages: StoredVcpMessage[]): number {
   return messages.reduce((sum, message) => sum + message.content.length, 0);
+}
+
+const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+};
+
+function normalizeImageMimeType(filePath: string, mimeType?: string): string {
+  const normalized = mimeType?.trim().toLowerCase();
+  if (normalized && normalized.startsWith("image/") && normalized !== "image/*") {
+    return normalized;
+  }
+
+  const ext = path.extname(filePath).toLowerCase();
+  return IMAGE_EXTENSION_TO_MIME[ext] ?? "image/jpeg";
 }
 
 /**
@@ -100,7 +121,7 @@ async function buildCurrentUserContent(request: ChatRequest): Promise<VcpMessage
   if (media.type === "image") {
     const data = await fs.readFile(media.filePath);
     const base64 = data.toString("base64");
-    const mimeType = media.mimeType || "image/jpeg";
+    const mimeType = normalizeImageMimeType(media.filePath, media.mimeType);
     const parts: VcpContentPart[] = [];
 
     if (text) {

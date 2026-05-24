@@ -20,6 +20,21 @@ import { handleSlashCommand } from "./slash-commands.js";
 
 const MEDIA_TEMP_DIR = path.join(os.tmpdir(), "weixin-agent/media");
 
+const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".svg": "image/svg+xml",
+};
+
+function inferImageMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  return IMAGE_EXTENSION_TO_MIME[ext] ?? "image/jpeg";
+}
+
 /** Save a buffer to a temporary file, returning the file path. */
 async function saveMediaBuffer(
   buffer: Buffer,
@@ -251,7 +266,11 @@ export async function processOneMessage(
         label: "inbound",
       });
       if (downloaded.decryptedPicPath) {
-        media = { type: "image", filePath: downloaded.decryptedPicPath, mimeType: "image/*" };
+        media = {
+          type: "image",
+          filePath: downloaded.decryptedPicPath,
+          mimeType: inferImageMimeType(downloaded.decryptedPicPath),
+        };
       } else if (downloaded.decryptedVideoPath) {
         media = { type: "video", filePath: downloaded.decryptedVideoPath, mimeType: "video/mp4" };
       } else if (downloaded.decryptedFilePath) {

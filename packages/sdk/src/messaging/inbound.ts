@@ -2,6 +2,7 @@ import { logger } from "../util/logger.js";
 import { generateId } from "../util/random.js";
 import type { WeixinMessage, MessageItem } from "../api/types.js";
 import { MessageItemType } from "../api/types.js";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // Context token store (in-process cache: accountId+userId → contextToken)
@@ -108,6 +109,8 @@ export function bodyFromItemList(itemList?: MessageItem[]): string {
 export type WeixinInboundMediaOpts = {
   /** Local path to decrypted image file. */
   decryptedPicPath?: string;
+  /** MIME type for the image file (e.g. "image/jpeg"). */
+  imageMediaType?: string;
   /** Local path to transcoded/raw voice file (.wav or .silk). */
   decryptedVoicePath?: string;
   /** MIME type for the voice file (e.g. "audio/wav" or "audio/silk"). */
@@ -131,6 +134,16 @@ export function weixinMessageToMsgContext(
   accountId: string,
   opts?: WeixinInboundMediaOpts,
 ): WeixinMsgContext {
+  const inferImageMimeType = (filePath: string): string => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".png") return "image/png";
+    if (ext === ".gif") return "image/gif";
+    if (ext === ".webp") return "image/webp";
+    if (ext === ".bmp") return "image/bmp";
+    if (ext === ".svg") return "image/svg+xml";
+    return "image/jpeg";
+  };
+
   const from_user_id = msg.from_user_id ?? "";
   const ctx: WeixinMsgContext = {
     Body: bodyFromItemList(msg.item_list),
@@ -150,7 +163,7 @@ export function weixinMessageToMsgContext(
 
   if (opts?.decryptedPicPath) {
     ctx.MediaPath = opts.decryptedPicPath;
-    ctx.MediaType = "image/*";
+    ctx.MediaType = opts.imageMediaType ?? inferImageMimeType(opts.decryptedPicPath);
   } else if (opts?.decryptedVideoPath) {
     ctx.MediaPath = opts.decryptedVideoPath;
     ctx.MediaType = "video/mp4";
